@@ -17,6 +17,11 @@ static i2s_chan_handle_t rx_handle = NULL;
 static uint32_t current_sample_rate = AUDIO_SAMPLE_RATE;
 static i2c_master_dev_handle_t s_codec_i2c_handle = NULL;
 
+// Define ES8311 Address if not defined (Fallback)
+#ifndef ES8311_ADDRESS_0
+#define ES8311_ADDRESS_0 0x18
+#endif
+
 // ES8311 Registers
 #define ES8311_REG_RESET 0x00
 #define ES8311_REG_CLK_MANAGER 0x01
