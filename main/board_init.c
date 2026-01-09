@@ -69,7 +69,8 @@ esp_err_t board_init_touch(i2c_master_bus_handle_t bus_handle) {
         tp_io_config.dev_addr = TOUCH_I2C_ADDR;
     }
 
-    ESP_LOGI(TAG, "Initializing Touch IO at address 0x%02X...", tp_io_config.dev_addr);
+    // Cast dev_addr to unsigned int to fix format string warning/error
+    ESP_LOGI(TAG, "Initializing Touch IO at address 0x%02X...", (unsigned int)tp_io_config.dev_addr);
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(bus_handle, &tp_io_config, &tp_io_handle), TAG, "New Panel IO I2C failed");
 
     esp_lcd_touch_config_t tp_cfg = {
