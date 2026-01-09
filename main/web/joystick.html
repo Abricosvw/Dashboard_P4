@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECU Joystick Controller</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #121212;
+            color: #eee;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .nav-header {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .btn {
+            background: #333;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .btn:hover { background: #444; }
+        .btn-blue { background: #00e5ff; color: black; }
+        #joystick-container {
+            width: 250px;
+            height: 250px;
+            background: #222;
+            border-radius: 50%;
+            position: relative;
+            touch-action: none;
+        }
+        #joystick-handle {
+            width: 80px;
+            height: 80px;
+            background: #00e5ff;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.5);
+        }
+        .buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 40px;
+        }
+        .game-btn {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #333;
+            border: 4px solid #444;
+            color: white;
+            font-weight: bold;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+        }
+        .game-btn:active { background: #555; transform: scale(0.95); }
+        .status { margin-top: 20px; font-family: monospace; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="nav-header">
+        <a href="/" class="btn">📂 File Manager</a>
+        <div id="connection-status">Disconnected</div>
+    </div>
+
+    <div id="joystick-container">
+        <div id="joystick-handle"></div>
+    </div>
+
+    <div class="buttons">
+        <div class="game-btn" id="btn-a">A</div>
+        <div class="game-btn" id="btn-b">B</div>
+    </div>
+
+    <div class="status" id="debug">X: 0, Y: 0 | A: 0, B: 0</div>
+
+    <script>
+        const handle = document.getElementById('joystick-handle');
+        const container = document.getElementById('joystick-container');
+        const debug = document.getElementById('debug');
+        const status = document.getElementById('connection-status');
+        
+        let ws;
+        let state = { x: 0, y: 0, a: 0, b: 0, s: 0, l: 0 };
+        let active = false;
+        
+        function connect() {
+            // Use port 8081 for the combined WebSocket
+            const wsUrl = `ws://${window.location.hostname}:8081/ws`;
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                status.innerText = 'Connected';
+                status.style.color = '#00e5ff';
+            };
+            
+            ws.onclose = () => {
+                status.innerText = 'Disconnected - Retrying...';
+                status.style.color = '#ff5252';
+                setTimeout(connect, 1000);
+            };
+        }
+
+        function sendState() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(state));
+            }
+            debug.innerText = `X: ${state.x}, Y: ${state.y} | A: ${state.a}, B: ${state.b}`;
+        }
+
+        container.addEventListener('touchstart', start);
+        container.addEventListener('touchmove', move);
+        container.addEventListener('touchend', end);
+        
+        function start(e) { active = true; move(e); }
+        function end() { 
+            active = false; 
+            state.x = 0; state.y = 0; 
+            handle.style.left = '50%'; handle.style.top = '50%';
+            sendState();
+        }
+        
+        function move(e) {
+            if (!active) return;
+            const rect = container.getBoundingClientRect();
+            const touch = e.touches[0];
+            let x = touch.clientX - rect.left - rect.width / 2;
+            let y = touch.clientY - rect.top - rect.height / 2;
+            
+            const dist = Math.sqrt(x*x + y*y);
+            const max = rect.width / 2;
+            
+            if (dist > max) {
+                x = (x / dist) * max;
+                y = (y / dist) * max;
+            }
+            
+            handle.style.left = (50 + (x / max) * 50) + '%';
+            handle.style.top = (50 + (y / max) * 50) + '%';
+            
+            state.x = Math.round((x / max) * 100);
+            state.y = Math.round((-y / max) * 100);
+            sendState();
+        }
+
+        document.getElementById('btn-a').onmousedown = () => { state.a = 1; sendState(); };
+        document.getElementById('btn-a').onmouseup = () => { state.a = 0; sendState(); };
+        document.getElementById('btn-b').onmousedown = () => { state.b = 1; sendState(); };
+        document.getElementById('btn-b').onmouseup = () => { state.b = 0; sendState(); };
+        
+        connect();
+        setInterval(sendState, 100); // Heartbeat
+    </script>
+</body>
+</html>

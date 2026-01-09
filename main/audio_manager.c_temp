@@ -1,0 +1,106 @@
+#include "audio_manager.h"
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+#include "driver/i2s_std.h"
+#include "es8311.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static const char *TAG = "AUDIO_MGR";
+extern i2c_master_bus_handle_t i2c1_bus;
+static i2s_chan_handle_t tx_handle = NULL;
+static i2s_chan_handle_t rx_handle = NULL;
+static uint32_t current_sample_rate = AUDIO_SAMPLE_RATE;
+
+// Forward declaration
+esp_err_t audio_set_sample_rate_internal(uint32_t rate);
+
+static es8311_handle_t s_es_handle = NULL;
+
+static esp_err_t audio_codec_init(void) {
+  // Initialize ES8311 Codec
+  // Note: We use the existing i2c1_bus handle if possible, 
+  // but ES8311 driver might expect a port number.
+  // In ESP-IDF 5.x, many drivers still take i2c_port_t.
+  s_es_handle = es8311_create(AUDIO_I2C_PORT, ES8311_ADDRESS_0);
+  ESP_RETURN_ON_FALSE(s_es_handle, ESP_FAIL, TAG, "ES8311 create failed");
+
+  const es8311_clock_config_t clk_cfg = {
+      .mclk_from_mclk_pin = true,
+      .mclk_frequency = current_sample_rate * 256,
+      .sample_frequency = current_sample_rate};
+  ESP_RETURN_ON_ERROR(es8311_init(s_es_handle, &clk_cfg, ES8311_RESOLUTION_16,
+                                  ES8311_RESOLUTION_16),
+                      TAG, "ES8311 init failed");
+
+  ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_es_handle, 65, NULL), TAG,
+                      "ES8311 volume set failed"); // Set volume to 65%
+  ESP_RETURN_ON_ERROR(es8311_microphone_config(s_es_handle, false), TAG,
+                      "ES8311 mic config failed"); // false = not digital mic
+  ESP_RETURN_ON_ERROR(es8311_voice_mute(s_es_handle, false), TAG,
+                      "ES8311 unmute failed"); // Explicit Unmute
+
+  return ESP_OK;
+}
+
+static esp_err_t audio_i2s_init(void) {
+  i2s_chan_config_t chan_cfg =
+      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+  ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &tx_handle, &rx_handle), TAG,
+                      "I2S new channel failed");
+
+  i2s_std_config_t std_cfg = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(current_sample_rate),
+      .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                  I2S_SLOT_MODE_STEREO),
+      .gpio_cfg =
+          {
+              .mclk = AUDIO_MCLK_IO,
+              .bclk = AUDIO_BCLK_IO,
+              .ws = AUDIO_WS_IO,
+              .dout = AUDIO_DOUT_IO,
+              .din = AUDIO_DIN_IO,
+          },
+  };
+  // Enable MCLK output
+  std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+
+  ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_handle, &std_cfg), TAG,
+                      "I2S TX init failed");
+  ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx_handle, &std_cfg), TAG,
+                      "I2S RX init failed");
+
+  ESP_RETURN_ON_ERROR(i2s_channel_enable(tx_handle), TAG,
+                      "I2S TX enable failed");
+  ESP_RETURN_ON_ERROR(i2s_channel_enable(rx_handle), TAG,
+                      "I2S RX enable failed");
+
+  return ESP_OK;
+}
+
+esp_err_t audio_init(void) {
+  ESP_LOGI(TAG, "Initializing Audio System (Variant 1)...");
+  
+  // PA Enable
+  gpio_config_t pa_en_conf = {
+      .pin_bit_mask = (1ULL << AUDIO_PA_ENABLE_IO),
+      .mode = GPIO_MODE_OUTPUT,
+  };
+  gpio_config(&pa_en_conf);
+  gpio_set_level(AUDIO_PA_ENABLE_IO, 1);
+
+  ESP_RETURN_ON_ERROR(audio_codec_init(), TAG, "Codec init failed");
+  ESP_RETURN_ON_ERROR(audio_i2s_init(), TAG, "I2S init failed");
+
+  ESP_LOGI(TAG, "Audio System Initialized Successfully");
+  return ESP_OK;
+}
+
+// ... rest of audio_manager.c (omitted for brevity in write_to_file, 
+// using replace_file_content for full sync if needed)
+// Wait, I should not truncate the file. I will use replace_file_content instead.
