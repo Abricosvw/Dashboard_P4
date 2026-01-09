@@ -58,12 +58,13 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_ldo_acquire_channel(&cfg4, &ldo4));
   vTaskDelay(pdMS_TO_TICKS(500));
 
-  // 2. Initialize Master I2C Bus on Port 1 (Shared Pins)
+  // 2. Initialize Master I2C Bus (Shared Pins)
   // Using pins from Kconfig
+  // Changed to I2C_NUM_0 to align with Waveshare Wiki example
   ESP_LOGI(TAG, "Initializing I2C Master Bus...");
   i2c_master_bus_config_t i2c_bus_config = {
       .clk_source = I2C_CLK_SRC_DEFAULT,
-      .i2c_port = I2C_NUM_1,
+      .i2c_port = I2C_NUM_0,
       .scl_io_num = LCD_I2C_SCL_IO,
       .sda_io_num = LCD_I2C_SDA_IO,
       .glitch_ignore_cnt = 7,
@@ -119,7 +120,7 @@ void app_main(void) {
       vTaskDelay(pdMS_TO_TICKS(100));
   }
 
-  ESP_LOGW(TAG, "Scanning I2C on Port 1...");
+  ESP_LOGW(TAG, "Scanning I2C on Port 0...");
   for (int i = 1; i < 127; i++) {
     if (i2c_master_probe(i2c1_bus, i, 50) == ESP_OK) {
       ESP_LOGW(TAG, "Found 0x%02X", i);

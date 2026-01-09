@@ -21,7 +21,7 @@
 // Audio Config
 #define AUDIO_SAMPLE_RATE (16000)
 #define AUDIO_BITS_PER_SAMPLE (16)
-#define AUDIO_I2C_PORT (I2C_NUM_1)
+#define AUDIO_I2C_PORT (I2C_NUM_0) // Updated to Match Main I2C Port
 
 /**
  * @brief Initialize Audio System (I2C, I2S, Codec, Amp)
