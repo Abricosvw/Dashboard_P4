@@ -45,9 +45,7 @@ void list_sd_files(const char *path) {
 }
 
 void app_main(void) {
-  // SET ACTIVE VARIANT HERE
-  // Target: VARIANT 1 (ESP32-P4-WIFI6-DEV-KIT)
-  ESP_LOGI(TAG, "Starting Dashboard_P4 (VARIANT 1: P4-WIFI6-DEV-KIT)...");
+  ESP_LOGI(TAG, "Starting Dashboard_P4...");
 
   // 1. Initialize Power (LDOs)
   // LDO4 is required for SD card and some peripherals
@@ -60,35 +58,66 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_ldo_acquire_channel(&cfg4, &ldo4));
   vTaskDelay(pdMS_TO_TICKS(500));
 
-  // 2. Initialize Master I2C Bus on Port 1 (Shared Pins 7, 8)
-  ESP_LOGI(TAG, "Initializing I2C Master Bus on Port 1...");
+  // 2. Initialize Master I2C Bus on Port 1 (Shared Pins)
+  // Using pins from Kconfig
+  ESP_LOGI(TAG, "Initializing I2C Master Bus...");
   i2c_master_bus_config_t i2c_bus_config = {
       .clk_source = I2C_CLK_SRC_DEFAULT,
       .i2c_port = I2C_NUM_1,
-      .scl_io_num = 8,
-      .sda_io_num = 7,
+      .scl_io_num = LCD_I2C_SCL_IO,
+      .sda_io_num = LCD_I2C_SDA_IO,
       .glitch_ignore_cnt = 7,
       .flags.enable_internal_pullup = true,
   };
   ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &i2c1_bus));
 
-  // 2.1 Touchscreen Hardware Reset (CRITICAL: Must happen BEFORE I2C scan)
-  ESP_LOGI(TAG, "Standard reset via GPIO 5 and 4 (Variant 1)...");
-  gpio_config_t touch_io_conf = {
-      .pin_bit_mask = (1ULL << 5) | (1ULL << 4), // 5=RST, 4=INT
-      .mode = GPIO_MODE_OUTPUT,
-      .intr_type = GPIO_INTR_DISABLE,
-      .pull_down_en = 0,
-      .pull_up_en = 0,
-  };
-  gpio_config(&touch_io_conf);
-  gpio_set_level(5, 0);
-  gpio_set_level(4, 0);
-  vTaskDelay(pdMS_TO_TICKS(20));
-  gpio_set_level(5, 1);
-  vTaskDelay(pdMS_TO_TICKS(20));
-  gpio_set_direction(4, GPIO_MODE_INPUT); // INT back to input
-  vTaskDelay(pdMS_TO_TICKS(100));         // Stabilization
+  // 2.1 Touchscreen Hardware Reset and Strapping
+  // The GT911 requires specific bootstrapping on INT pin during Reset to select I2C address.
+  // Address 0x5D: INT High during Reset rising edge.
+  // Address 0x14: INT Low during Reset rising edge.
+  // We target 0x5D (default Kconfig).
+  if (TOUCH_RST_IO >= 0 && TOUCH_INT_IO >= 0) {
+      ESP_LOGI(TAG, "Performing Touch Reset & Strapping (RST:%d, INT:%d)...", TOUCH_RST_IO, TOUCH_INT_IO);
+
+      gpio_config_t touch_io_conf = {
+          .pin_bit_mask = (1ULL << TOUCH_RST_IO) | (1ULL << TOUCH_INT_IO),
+          .mode = GPIO_MODE_OUTPUT,
+          .intr_type = GPIO_INTR_DISABLE,
+          .pull_down_en = 0,
+          .pull_up_en = 0,
+      };
+      gpio_config(&touch_io_conf);
+
+      // Reset Sequence for Address 0x5D
+      // 1. RST Low, INT Low
+      gpio_set_level(TOUCH_RST_IO, 0);
+      gpio_set_level(TOUCH_INT_IO, 0);
+      vTaskDelay(pdMS_TO_TICKS(20));
+
+      // 2. INT High (to select 0x5D)
+      gpio_set_level(TOUCH_INT_IO, 1);
+      vTaskDelay(pdMS_TO_TICKS(5));
+
+      // 3. RST High (Release Reset)
+      gpio_set_level(TOUCH_RST_IO, 1);
+      vTaskDelay(pdMS_TO_TICKS(20));
+
+      // 4. Restore INT to Input
+      gpio_set_direction(TOUCH_INT_IO, GPIO_MODE_INPUT);
+      vTaskDelay(pdMS_TO_TICKS(100)); // Stabilization
+  } else if (TOUCH_RST_IO >= 0) {
+      // Fallback reset without strapping if INT not defined
+      ESP_LOGI(TAG, "Performing Touch Reset (RST:%d)...", TOUCH_RST_IO);
+      gpio_config_t touch_rst_conf = {
+          .pin_bit_mask = (1ULL << TOUCH_RST_IO),
+          .mode = GPIO_MODE_OUTPUT,
+      };
+      gpio_config(&touch_rst_conf);
+      gpio_set_level(TOUCH_RST_IO, 0);
+      vTaskDelay(pdMS_TO_TICKS(20));
+      gpio_set_level(TOUCH_RST_IO, 1);
+      vTaskDelay(pdMS_TO_TICKS(100));
+  }
 
   ESP_LOGW(TAG, "Scanning I2C on Port 1...");
   for (int i = 1; i < 127; i++) {
@@ -98,8 +127,11 @@ void app_main(void) {
   }
 
   // 3. Initialize Shared Peripherals
-  board_init_backlight(I2C_NUM_1);
+  board_init_backlight(i2c1_bus);
   board_set_backlight(80);
+
+  // Initialize Touch
+  board_init_touch(i2c1_bus);
 
   // 4. Initialize Audio (Early to avoid bus contention)
   audio_init();

@@ -1,0 +1,97 @@
+menu "Board Selection"
+    choice BOARD_TYPE
+        prompt "Select Board Variant"
+        default BOARD_ESP32_P4_WIFI6_DEV_KIT
+        help
+            Select the specific board variant to configure correct pinouts.
+
+    config BOARD_ESP32_P4_WIFI6_DEV_KIT
+        bool "Variant 1: ESP32-P4-WIFI6-DEV-KIT"
+
+    config BOARD_ESP32_P4_PICO
+        bool "Variant 2: ESP32-P4-Pico"
+
+    endchoice
+endmenu
+
+menu "Display Configuration"
+    config LCD_I2C_SCL_IO
+        int "LCD I2C SCL IO"
+        default 8 if BOARD_ESP32_P4_WIFI6_DEV_KIT
+        default 8 if BOARD_ESP32_P4_PICO
+
+    config LCD_I2C_SDA_IO
+        int "LCD I2C SDA IO"
+        default 7 if BOARD_ESP32_P4_WIFI6_DEV_KIT
+        default 7 if BOARD_ESP32_P4_PICO
+
+    config LCD_RST_IO
+        int "LCD Reset IO"
+        default 33 if BOARD_ESP32_P4_WIFI6_DEV_KIT
+        default 33 if BOARD_ESP32_P4_PICO
+        help
+            GPIO used for hardware reset of the LCD panel.
+
+    config LCD_BK_I2C_ADDR
+        hex "Backlight I2C Address"
+        default 0x45
+
+    config TOUCH_I2C_ADDR
+        hex "Touch Panel I2C Address"
+        default 0x5D
+        help
+            Common addresses are 0x5D or 0x14 for GT911.
+
+    config TOUCH_RST_IO
+        int "Touch Reset IO"
+        default 5 if BOARD_ESP32_P4_WIFI6_DEV_KIT
+        default 5 if BOARD_ESP32_P4_PICO
+        help
+            GPIO for Touch Reset. Used to hardware reset the touch controller.
+            Set to -1 if not used.
+
+    config TOUCH_INT_IO
+        int "Touch Interrupt IO"
+        default 4 if BOARD_ESP32_P4_WIFI6_DEV_KIT
+        default 4 if BOARD_ESP32_P4_PICO
+        help
+            GPIO for Touch Interrupt. Set to -1 if polling is used.
+endmenu
+
+menu "Audio Configuration"
+    config AUDIO_I2S_MCLK_IO
+        int "I2S MCLK IO"
+        default 13
+
+    config AUDIO_I2S_SCLK_IO
+        int "I2S SCLK IO"
+        default 12
+
+    config AUDIO_I2S_WS_IO
+        int "I2S WS IO"
+        default 10
+
+    config AUDIO_I2S_DOUT_IO
+        int "I2S Data Out IO (Speaker)"
+        default 9
+        help
+            GPIO for I2S Data Output (from ESP to Codec/Amp).
+            Corresponds to DSDIN on Waveshare boards.
+
+    config AUDIO_I2S_DIN_IO
+        int "I2S Data In IO (Mic)"
+        default 11
+        help
+            GPIO for I2S Data Input (from Codec/Mic to ESP).
+            Corresponds to ASDOUT on Waveshare boards.
+
+    config AUDIO_PA_ENABLE_IO
+        int "Power Amplifier Enable IO"
+        default 53
+endmenu
+
+menu "WiFi Configuration"
+    config WIFI_SLAVE_RESET_IO
+        int "WiFi Slave Reset IO"
+        default 54
+endmenu

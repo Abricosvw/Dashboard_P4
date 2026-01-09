@@ -8,8 +8,9 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include <string.h>
+#include "sdkconfig.h"
 
-#define SLAVE_RESET_IO 54
+#define SLAVE_RESET_IO CONFIG_WIFI_SLAVE_RESET_IO
 
 static const char *TAG = "WIFI_AP";
 

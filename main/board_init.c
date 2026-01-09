@@ -1,41 +1,35 @@
 #include "display_init.h"
-#include "driver/ledc.h" // Needed for PWM
+#include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "BOARD_INIT";
 static bool s_backlight_init_done = false;
+static i2c_master_dev_handle_t s_bk_i2c_handle = NULL;
+static esp_lcd_touch_handle_t s_touch_handle = NULL;
 
-esp_err_t board_init_backlight(i2c_port_t port) {
-  // Initialize LEDC PWM for backlight control on GPIO 26
-  ledc_timer_config_t ledc_timer = {
-      .speed_mode = LEDC_LOW_SPEED_MODE,
-      .duty_resolution = LEDC_TIMER_8_BIT,
-      .timer_num = LEDC_TIMER_0,
-      .freq_hz = 5000,
-      .clk_cfg = LEDC_AUTO_CLK,
+esp_err_t board_init_backlight(i2c_master_bus_handle_t bus_handle) {
+  if (bus_handle == NULL) {
+    ESP_LOGE(TAG, "I2C bus handle is NULL");
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  i2c_device_config_t dev_cfg = {
+      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+      .device_address = LCD_BK_I2C_ADDR,
+      .scl_speed_hz = 400000,
   };
-  ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-  ledc_channel_config_t ledc_channel = {
-      .speed_mode = LEDC_LOW_SPEED_MODE,
-      .channel = LEDC_CHANNEL_0,
-      .timer_sel = LEDC_TIMER_0,
-      .intr_type = LEDC_INTR_DISABLE,
-      .gpio_num = LCD_BK_LIGHT_IO, // GPIO 26
-      .duty = 0,
-      .hpoint = 0,
-  };
-  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-
+  ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus_handle, &dev_cfg, &s_bk_i2c_handle), TAG, "Failed to add backlight I2C device");
   s_backlight_init_done = true;
-  ESP_LOGI(TAG, "Backlight PWM initialized on GPIO %d", LCD_BK_LIGHT_IO);
+  ESP_LOGI(TAG, "Backlight I2C device added at address 0x%02X", LCD_BK_I2C_ADDR);
   return ESP_OK;
 }
 
@@ -43,21 +37,62 @@ esp_err_t board_set_backlight(uint32_t level_percent) {
   if (level_percent > 100)
     level_percent = 100;
 
-  // Map 0-100% to 0-255 duty cycle
-  uint32_t duty = (uint32_t)((255 * level_percent) / 100);
+  // Map 0-100% to 0-255
+  uint8_t duty = (uint8_t)((255 * level_percent) / 100);
 
-  ESP_LOGI(TAG, "Setting backlight PWM duty to %u%% (Val=%u)",
+  ESP_LOGI(TAG, "Setting backlight to %u%% (Val=%u)",
            (unsigned int)level_percent, (unsigned int)duty);
 
-  if (!s_backlight_init_done) {
+  if (!s_backlight_init_done || !s_bk_i2c_handle) {
     ESP_LOGE(TAG, "Backlight not initialized");
     return ESP_ERR_INVALID_STATE;
   }
 
-  ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty));
-  ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
+  uint8_t write_buf[2] = {LCD_BK_I2C_REG, duty};
+  ESP_RETURN_ON_ERROR(i2c_master_transmit(s_bk_i2c_handle, write_buf, sizeof(write_buf), -1), TAG, "Failed to write backlight brightness");
 
   return ESP_OK;
+}
+
+esp_err_t board_init_touch(i2c_master_bus_handle_t bus_handle) {
+    if (bus_handle == NULL) {
+        ESP_LOGE(TAG, "I2C bus handle is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    tp_io_config.scl_speed_hz = 400000;
+
+    // Check if we need to set the address from Kconfig
+    if (TOUCH_I2C_ADDR != 0) {
+        tp_io_config.dev_addr = TOUCH_I2C_ADDR;
+    }
+
+    ESP_LOGI(TAG, "Initializing Touch IO at address 0x%02X...", tp_io_config.dev_addr);
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(bus_handle, &tp_io_config, &tp_io_handle), TAG, "New Panel IO I2C failed");
+
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = LCD_PHYS_H_RES,
+        .y_max = LCD_PHYS_V_RES,
+        .rst_gpio_num = (gpio_num_t)TOUCH_RST_IO,
+        .int_gpio_num = (gpio_num_t)TOUCH_INT_IO,
+        .levels = {
+            .reset = 0,
+            .interrupt = 0,
+        },
+        .flags = {
+            .swap_xy = 0,
+            .mirror_x = 0,
+            .mirror_y = 0,
+        },
+    };
+
+    ESP_LOGI(TAG, "Initializing Touch Driver (GT911)...");
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &s_touch_handle), TAG, "New Touch GT911 failed");
+
+    ESP_LOGI(TAG, "Touch initialized successfully");
+    return ESP_OK;
 }
 
 esp_err_t board_init_display(esp_lcd_panel_handle_t *ret_panel) {
@@ -77,17 +112,19 @@ esp_err_t board_init_display(esp_lcd_panel_handle_t *ret_panel) {
       esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io), TAG,
       "New DSI IO failed");
 
-  // 3. Hardware Reset (GPIO 33)
-  ESP_LOGI(TAG, "Performing hardware reset on GPIO 33...");
-  gpio_config_t io_conf = {
-      .pin_bit_mask = (1ULL << LCD_RST_IO),
-      .mode = GPIO_MODE_OUTPUT,
-  };
-  gpio_config(&io_conf);
-  gpio_set_level(LCD_RST_IO, 0);
-  vTaskDelay(pdMS_TO_TICKS(100));
-  gpio_set_level(LCD_RST_IO, 1);
-  vTaskDelay(pdMS_TO_TICKS(200));
+  // 3. Hardware Reset (if defined)
+  if (LCD_RST_IO >= 0) {
+      ESP_LOGI(TAG, "Performing hardware reset on GPIO %d...", LCD_RST_IO);
+      gpio_config_t io_conf = {
+          .pin_bit_mask = (1ULL << LCD_RST_IO),
+          .mode = GPIO_MODE_OUTPUT,
+      };
+      gpio_config(&io_conf);
+      gpio_set_level(LCD_RST_IO, 0);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      gpio_set_level(LCD_RST_IO, 1);
+      vTaskDelay(pdMS_TO_TICKS(200));
+  }
 
   // 4. Configure DPI panel for 720x1280 (reduced bandwidth for slow PSRAM)
   ESP_LOGI(TAG, "Installing ILI9881C driver (720x1280 @ ~20Hz, RGB565)");
@@ -136,8 +173,6 @@ esp_err_t board_init_display(esp_lcd_panel_handle_t *ret_panel) {
   vTaskDelay(pdMS_TO_TICKS(100));
   ESP_ERROR_CHECK(esp_lcd_panel_init(*ret_panel));
   ESP_LOGI(TAG, "Panel initialized successfully!");
-  // Note: DSI panels don't support hardware swap_xy/mirror
-  // Rotation is handled via LVGL software rotation
 
   return ESP_OK;
 }
