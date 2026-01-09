@@ -2,7 +2,6 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
-#include "es8311.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -16,35 +15,93 @@ extern i2c_master_bus_handle_t i2c1_bus;
 static i2s_chan_handle_t tx_handle = NULL;
 static i2s_chan_handle_t rx_handle = NULL;
 static uint32_t current_sample_rate = AUDIO_SAMPLE_RATE;
+static i2c_master_dev_handle_t s_codec_i2c_handle = NULL;
+
+// ES8311 Registers
+#define ES8311_REG_RESET 0x00
+#define ES8311_REG_CLK_MANAGER 0x01
+#define ES8311_REG_CLK_DIV1 0x02
+#define ES8311_REG_CLK_DIV2 0x03
+#define ES8311_REG_CLK_SRC 0x04
+#define ES8311_REG_CLK_DIV3 0x05
+#define ES8311_REG_AIF_DIV 0x06
+#define ES8311_REG_AIF_TRI 0x07
+#define ES8311_REG_AIF_CH 0x08
+#define ES8311_REG_ADC 0x14
+#define ES8311_REG_SYS_POWER 0x0D
+#define ES8311_REG_ADC_POWER 0x0E
+#define ES8311_REG_DAC_POWER 0x12
+#define ES8311_REG_DAC_SET1 0x32
+#define ES8311_REG_DAC_SET2 0x37
+#define ES8311_REG_ADC_SET1 0x17
+#define ES8311_REG_ADC_SET2 0x1A
+#define ES8311_REG_ADC_VOL 0x16
+#define ES8311_REG_DAC_VOL 0x32
+#define ES8311_REG_GPIO 0x44
+
+static esp_err_t es8311_write_reg(uint8_t reg_addr, uint8_t data) {
+  if (!s_codec_i2c_handle) return ESP_ERR_INVALID_STATE;
+  uint8_t write_buf[2] = {reg_addr, data};
+  return i2c_master_transmit(s_codec_i2c_handle, write_buf, sizeof(write_buf), -1);
+}
 
 // Forward declaration
 esp_err_t audio_set_sample_rate_internal(uint32_t rate);
 
-// I2C initialization is handled globally in main.c using i2c_bus component
+static esp_err_t audio_codec_config(uint32_t sample_rate) {
+    if (!s_codec_i2c_handle) return ESP_FAIL;
 
-static es8311_handle_t s_es_handle = NULL;
+    // 1. Reset
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_RESET, 0x1F), TAG, "Reset failed");
+    vTaskDelay(pdMS_TO_TICKS(20));
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_RESET, 0x00), TAG, "Reset release failed");
+
+    // 2. Clock Config (Assume MCLK = 256 * fs)
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_CLK_MANAGER, 0x3F), TAG, "Clk Mgr failed"); // Enable all clocks
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_CLK_SRC, 0x00), TAG, "Clk Src failed"); // MCLK from pin, not div
+    // Set Sample Rate logic can be complex, simplifying for standard rate
+    // Pre-div = 1, Div = 1 => ADC_FS = MCLK / 256
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_CLK_DIV1, 0x01), TAG, "Clk Div1 failed"); // MCLK/1
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_CLK_DIV2, 0x00), TAG, "Clk Div2 failed");
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_CLK_DIV3, 0x10), TAG, "Clk Div3 failed");
+
+    // 3. AIF Config (I2S Standard, 16-bit)
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_AIF_DIV, 0x00), TAG, "AIF Div failed"); // LRCK = BCLK / 64 (standard)
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_AIF_TRI, 0x00), TAG, "AIF Tri failed");
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_AIF_CH, 0x0D), TAG, "AIF Ch failed"); // 16bit, I2S format
+
+    // 4. Power Up
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_SYS_POWER, 0x00), TAG, "Sys Pwr failed"); // Power up all
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_ADC_POWER, 0x00), TAG, "ADC Pwr failed");
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_DAC_POWER, 0x3C), TAG, "DAC Pwr failed"); // Enable DAC L/R
+
+    // 5. Volume (Default 0xBF = 0dB)
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_DAC_VOL, 0xBF), TAG, "Vol failed");
+
+    // 6. Unmute
+    ESP_RETURN_ON_ERROR(es8311_write_reg(ES8311_REG_DAC_SET1, 0x00), TAG, "Unmute failed");
+
+    ESP_LOGI(TAG, "ES8311 Configured for %" PRIu32 " Hz", sample_rate);
+    return ESP_OK;
+}
 
 static esp_err_t audio_codec_init(void) {
-  // Initialize ES8311 Codec
-  s_es_handle = es8311_create(AUDIO_I2C_PORT, ES8311_ADDRESS_0);
-  ESP_RETURN_ON_FALSE(s_es_handle, ESP_FAIL, TAG, "ES8311 create failed");
+  // Initialize ES8311 Codec using New I2C Driver
+  if (!i2c1_bus) {
+      ESP_LOGE(TAG, "I2C Bus not initialized");
+      return ESP_FAIL;
+  }
 
-  const es8311_clock_config_t clk_cfg = {
-      .mclk_from_mclk_pin = true,
-      .mclk_frequency = current_sample_rate * 256,
-      .sample_frequency = current_sample_rate};
-  ESP_RETURN_ON_ERROR(es8311_init(s_es_handle, &clk_cfg, ES8311_RESOLUTION_16,
-                                  ES8311_RESOLUTION_16),
-                      TAG, "ES8311 init failed");
+  i2c_device_config_t dev_cfg = {
+      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+      .device_address = ES8311_ADDRESS_0,
+      .scl_speed_hz = 100000,
+  };
 
-  ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_es_handle, 65, NULL), TAG,
-                      "ES8311 volume set failed"); // Set volume to 65%
-  ESP_RETURN_ON_ERROR(es8311_microphone_config(s_es_handle, false), TAG,
-                      "ES8311 mic config failed"); // false = not digital mic
-  ESP_RETURN_ON_ERROR(es8311_voice_mute(s_es_handle, false), TAG,
-                      "ES8311 unmute failed"); // Explicit Unmute
+  ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c1_bus, &dev_cfg, &s_codec_i2c_handle), TAG, "Failed to add ES8311 I2C device");
+  ESP_LOGI(TAG, "ES8311 I2C Device added");
 
-  return ESP_OK;
+  return audio_codec_config(current_sample_rate);
 }
 
 static esp_err_t audio_i2s_init(void) {
@@ -100,12 +157,7 @@ esp_err_t audio_set_sample_rate_internal(uint32_t rate) {
                       "I2S reconfig failed");
 
   // 3. Reconfigure Codec
-  es8311_clock_config_t codec_clk_cfg = {.mclk_from_mclk_pin = true,
-                                         .mclk_frequency = rate * 256,
-                                         .sample_frequency = rate};
-  ESP_RETURN_ON_ERROR(es8311_init(s_es_handle, &codec_clk_cfg,
-                                  ES8311_RESOLUTION_16, ES8311_RESOLUTION_16),
-                      TAG, "ES8311 re-init failed");
+  audio_codec_config(rate);
 
   // 4. Enable I2S
   i2s_channel_enable(tx_handle);
@@ -166,10 +218,6 @@ esp_err_t audio_play_tone(uint32_t freq_hz, uint32_t duration_ms) {
   free(buffer);
   return ESP_OK;
 }
-
-#include <string.h>
-
-// ... (existing includes)
 
 // WAV Header Structure (simplified for parsing)
 typedef struct {
@@ -239,12 +287,6 @@ esp_err_t audio_play_wav(const char *path) {
   uint32_t wav_chunk_size;
   bool data_found = false;
 
-  // Start searching after standard 36-byte header (RIFF + WAVE + fmt basic)
-  // We already read sizeof(wav_header_t) which is 44 bytes.
-  // Ideally we should traverse from the beginning, but let's reset to after
-  // "fmt " chunk if possible. A standard "fmt " chunk is 16 bytes.
-  // header.fmt_chunk_size tells us actual size.
-
   long current_offset = 12; // Start after RIFF + Size + WAVE (4+4+4)
   fseek(f, current_offset, SEEK_SET);
 
@@ -270,9 +312,6 @@ esp_err_t audio_play_wav(const char *path) {
     // well
     return ESP_FAIL;
   }
-
-  // File pointer is now at the beginning of data samples
-  // long data_start_pos = ftell(f); // Unused
 
   // Buffer for reading
   const size_t chunk_size = 1024;
@@ -310,18 +349,13 @@ esp_err_t audio_play_wav(const char *path) {
 }
 
 esp_err_t audio_set_volume(int volume_percent) {
-  if (s_es_handle) {
-    return es8311_voice_volume_set(s_es_handle, volume_percent, NULL);
+  if (s_codec_i2c_handle) {
+    // Map 0-100 to 0-255 roughly (Register 0x32 DAC Volume is actually 0 = -96dB, 0xFF = 0dB)
+    // Actually datasheet says 0x32 is DAC Volume Control. 0 = -95.5dB, 255 = 0dB. 0.5dB step.
+    uint8_t vol_reg = (uint8_t)((volume_percent * 255) / 100);
+    return es8311_write_reg(ES8311_REG_DAC_VOL, vol_reg);
   }
   return ESP_FAIL;
-}
-
-static esp_err_t audio_codec_enable_adc(void) {
-  if (!s_es_handle)
-    return ESP_FAIL;
-  // Set ADC gain (Replaced invalid function with correct one)
-  es8311_microphone_gain_set(s_es_handle, ES8311_MIC_GAIN_18DB);
-  return ESP_OK;
 }
 
 esp_err_t audio_record_wav(const char *path, uint32_t duration_ms) {
@@ -342,8 +376,9 @@ esp_err_t audio_record_wav(const char *path, uint32_t duration_ms) {
   memset(&header, 0, sizeof(wav_header_t));
   fwrite(&header, 1, sizeof(wav_header_t), f); // Reserve space
 
-  // Ensure Codec ADC is ready
-  audio_codec_enable_adc();
+  // Ensure Codec ADC is ready (Configure ADC Power/Volume)
+  es8311_write_reg(ES8311_REG_ADC_POWER, 0x00); // Power up ADC
+  es8311_write_reg(ES8311_REG_ADC_VOL, 0xC0); // 0dB
 
   size_t chunk_size = 1024;
   int16_t *buffer = malloc(chunk_size);
