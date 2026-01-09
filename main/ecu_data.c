@@ -214,8 +214,41 @@ char *data_stream_to_json(void) {
 // ============================================================================
 
 char *ecu_data_to_string(const ecu_data_t *data) {
-  // TODO: Update this function if needed for the web server.
-  static char buffer[32] = "No data";
+  static char buffer[1024];
+  if (!data) {
+    snprintf(buffer, sizeof(buffer), "No data");
+    return buffer;
+  }
+
+  snprintf(buffer, sizeof(buffer),
+           "RPM: %.1f\n"
+           "TPS: %.1f%%\n"
+           "Pedal: %.1f%%\n"
+           "MAP: %.1f kPa\n"
+           "CLT: %.1f C\n"
+           "IAT: %.1f C\n"
+           "Oil Temp: %.1f C\n"
+           "Oil Press: %.1f kPa\n"
+           "Speed: %.1f km/h\n"
+           "Battery: %.1f V\n"
+           "WG Set: %.1f%%\n"
+           "WG Pos: %.1f%%\n"
+           "BOV: %.1f%%\n"
+           "TCU Req Tq: %.1f Nm\n"
+           "TCU Act Tq: %.1f Nm\n"
+           "Eng Trg Tq: %.1f Nm\n"
+           "Eng Act Tq: %.1f Nm\n"
+           "Limit Tq: %.1f Nm\n"
+           "Gear: %d\n"
+           "Selector: %d\n"
+           "Timestamp: %llu",
+           data->engine_rpm, data->tps_position, data->abs_pedal_pos,
+           data->map_kpa, data->clt_temp, data->iat_temp, data->oil_temp,
+           data->oil_pressure, data->vehicle_speed, data->battery_voltage,
+           data->wg_set_percent, data->wg_pos_percent, data->bov_percent,
+           data->tcu_tq_req_nm, data->tcu_tq_act_nm, data->eng_trg_nm,
+           data->eng_act_nm, data->limit_tq_nm, data->gear,
+           data->selector_position, (unsigned long long)data->timestamp);
   return buffer;
 }
 
