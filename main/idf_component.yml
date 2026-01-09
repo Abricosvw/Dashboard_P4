@@ -22,6 +22,5 @@ dependencies:
   espressif/esp_hosted: '*'
   espressif/es8311: ^1.0
   espressif/esp_websocket_client: '*'
-  # waveshare/esp_lcd_ili9881c: "^1.0.1"
-  waveshare/esp_lcd_ili9881c: '*'
-  waveshare/esp32_p4_nano: ^1.2.0
+  # waveshare/esp_lcd_ili9881c: '*'
+  # waveshare/esp32_p4_nano: ^1.2.0
