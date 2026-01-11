@@ -5,7 +5,7 @@
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
-#include "esp_lcd_touch_gt911.h"
+// #include "esp_lcd_touch_gt911.h" // Removed as per user request
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -13,7 +13,7 @@
 static const char *TAG = "BOARD_INIT";
 static bool s_backlight_init_done = false;
 static i2c_master_dev_handle_t s_bk_i2c_handle = NULL;
-static esp_lcd_touch_handle_t s_touch_handle = NULL;
+// static esp_lcd_touch_handle_t s_touch_handle = NULL; // Removed
 
 esp_err_t board_init_backlight(i2c_master_bus_handle_t bus_handle) {
   if (bus_handle == NULL) {
@@ -60,39 +60,9 @@ esp_err_t board_init_touch(i2c_master_bus_handle_t bus_handle) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
-    tp_io_config.scl_speed_hz = 400000;
+    // Touch driver removed as per user request (was GT911, user claims GT9271 with different config/driver needed)
+    ESP_LOGW(TAG, "Touch driver initialization skipped (User requested removal of GT911)");
 
-    // Check if we need to set the address from Kconfig
-    if (TOUCH_I2C_ADDR != 0) {
-        tp_io_config.dev_addr = TOUCH_I2C_ADDR;
-    }
-
-    // Cast dev_addr to unsigned int to fix format string warning/error
-    ESP_LOGI(TAG, "Initializing Touch IO at address 0x%02X...", (unsigned int)tp_io_config.dev_addr);
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(bus_handle, &tp_io_config, &tp_io_handle), TAG, "New Panel IO I2C failed");
-
-    esp_lcd_touch_config_t tp_cfg = {
-        .x_max = LCD_PHYS_H_RES,
-        .y_max = LCD_PHYS_V_RES,
-        .rst_gpio_num = (gpio_num_t)TOUCH_RST_IO,
-        .int_gpio_num = (gpio_num_t)TOUCH_INT_IO,
-        .levels = {
-            .reset = 0,
-            .interrupt = 0,
-        },
-        .flags = {
-            .swap_xy = 0,
-            .mirror_x = 0,
-            .mirror_y = 0,
-        },
-    };
-
-    ESP_LOGI(TAG, "Initializing Touch Driver (GT911)...");
-    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &s_touch_handle), TAG, "New Touch GT911 failed");
-
-    ESP_LOGI(TAG, "Touch initialized successfully");
     return ESP_OK;
 }
 
