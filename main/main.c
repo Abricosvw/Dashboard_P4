@@ -172,6 +172,11 @@ void app_main(void) {
 
   ESP_LOGI(TAG, "System Ready!");
 
+  // Play greeting melody from SD card
+  if (sd_card_is_mounted()) {
+    audio_play_wav("/sdcard/welcome.wav");
+  }
+
   while (1) {
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
